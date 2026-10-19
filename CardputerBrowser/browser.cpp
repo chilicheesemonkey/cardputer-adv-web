@@ -55,23 +55,38 @@ static void bar(int y, int h, uint16_t bg, const String& s, uint16_t fg = C_WHIT
 static void status(const String& s) { bar(BOT_Y, 135 - BOT_Y, C_NAVY, s); }
 
 // Returns true when a key event (or auto-repeat) is available.
+// Does its own edge detection (isChange() is unreliable on some keyboards), with debounce.
 static bool getKey(Key& k) {
-  static uint32_t t0 = 0, tLast = 0;
+  static String lastSig = "";
+  static uint32_t tPress = 0, tEmit = 0, tRelease = 0;
+  static const uint32_t DEBOUNCE = 150, REPEAT_DELAY = 550, REPEAT_RATE = 90;
   M5Cardputer.update();
   auto& kb = M5Cardputer.Keyboard;
-  if (!kb.isPressed()) return false;
-  bool changed = kb.isChange();
   uint32_t now = millis();
-  if (changed) { t0 = tLast = now; }
-  else if (now - t0 < 400 || now - tLast < 60) return false;
-  else tLast = now;
+  if (!kb.isPressed()) {
+    if (lastSig.length()) { tRelease = now; }
+    lastSig = "";
+    return false;
+  }
   auto st = kb.keysState();
   k = Key();
   k.enter = st.enter; k.del = st.del; k.tab = st.tab; k.fn = st.fn;
   if (!st.word.empty()) k.c = st.word.back();
   if (st.fn && k.c == '`') { k.esc = true; k.c = 0; }
-  if (!changed && (k.enter || k.tab)) return false;
-  return k.c || k.enter || k.del || k.tab || k.esc;
+  bool real = k.c || k.enter || k.del || k.tab || k.esc;
+  if (!real) return false;
+
+  String sig; sig += k.c; sig += k.enter; sig += k.del; sig += k.tab; sig += k.esc;
+  if (sig != lastSig) {                       // new press
+    if (now - tEmit < DEBOUNCE) { lastSig = sig; return false; }   // contact bounce / double scan
+    lastSig = sig; tPress = tEmit = now;
+    return true;
+  }
+  // same key still held: auto-repeat (not for Enter/Tab)
+  if (k.enter || k.tab) return false;
+  if (now - tPress < REPEAT_DELAY || now - tEmit < REPEAT_RATE) return false;
+  tEmit = now;
+  return true;
 }
 
 // Pick-from-list menu. Returns index, -1 on cancel, 1000+idx when 'x' pressed (if del).
